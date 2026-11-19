@@ -1,0 +1,56 @@
+# Trae el APK que publico la nube del repo de la app (Firebase Hosting, /descargas/) y lo deja en el enlace fijo:
+#   https://github.com/SAMY-Technology/lodge-cabana-turista-descargas/releases/download/apk/lodge-cabana-turista.apk
+# Sin llaves ni tokens de otro repo: usa solo el GITHUB_TOKEN de este repo (publico, minutos gratis).
+# Solo sube si cambio el sha256 (version.json) y si el APK bajado coincide con ese sha256.
+name: Traer APK
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: traer-apk
+  cancel-in-progress: false
+
+jobs:
+  traer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ORIGEN: https://lodge-cabana-turista-2906.web.app/descargas
+    steps:
+      - name: Version publicada en la nube
+        id: v
+        run: |
+          curl -fsS "$ORIGEN/version.json" -o version.json || { echo "Sin version en la nube todavia"; echo "sha=" >> "$GITHUB_OUTPUT"; exit 0; }
+          cat version.json
+          echo "sha=$(jq -r .sha256 version.json)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(jq -r .commit version.json)" >> "$GITHUB_OUTPUT"
+          echo "fecha=$(jq -r .fecha version.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Comparar con la version del enlace fijo
+        id: c
+        if: steps.v.outputs.sha != ''
+        run: |
+          ACTUAL=$(gh release view apk -R "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null | grep -oE 'sha256 [0-9a-f]{64}' | cut -d' ' -f2 || true)
+          echo "actual=$ACTUAL nueva=${{ steps.v.outputs.sha }}"
+          if [ "$ACTUAL" = "${{ steps.v.outputs.sha }}" ]; then echo "cambia=no" >> "$GITHUB_OUTPUT"; else echo "cambia=si" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Bajar, comprobar y publicar
+        if: steps.c.outputs.cambia == 'si'
+        run: |
+          curl -fsSL "$ORIGEN/lodge-cabana-turista.apk" -o lodge-cabana-turista.apk
+          echo "${{ steps.v.outputs.sha }}  lodge-cabana-turista.apk" | sha256sum -c -
+          NOTAS="APK de prueba de Lodge Cabana Turista. Paso las pruebas automaticas (codigo ${{ steps.v.outputs.commit }}, ${{ steps.v.outputs.fecha }}). sha256 ${{ steps.v.outputs.sha }}"
+          if gh release view apk -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload apk lodge-cabana-turista.apk -R "$GITHUB_REPOSITORY" --clobber
+            gh release edit apk -R "$GITHUB_REPOSITORY" --notes "$NOTAS"
+          else
+            gh release create apk lodge-cabana-turista.apk -R "$GITHUB_REPOSITORY" --title "APK de prueba" --notes "$NOTAS" --latest
+          fi
+          echo "Publicado: https://github.com/$GITHUB_REPOSITORY/releases/download/apk/lodge-cabana-turista.apk"
